@@ -175,7 +175,7 @@ LAST_MERGE_USAGE = {}
 BOT_PAUSED = False
 ADMIN_NOTIFICATIONS_ENABLED = False
 MUTED_USERS = set()
-TIP_IMAGE_CACHE = {}
+
 LAST_BROADCAST_STATS = {}
 # Executor global para tarefas CPU-bound (Processamento de Imagem)
 # Limitado a 1 worker para evitar sobrecarga em hardware modesto (i3/4GB RAM)
@@ -1287,94 +1287,6 @@ async def check_maintenance(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return False
 
 
-async def send_keyboard_tip_image(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Envia a imagem de dica do teclado baseada no idioma e notifica admin em caso de erro."""
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    lang_code = context.user_data.get("custom_language")
-    if not lang_code and user and user.language_code:
-        lang_code = user.language_code.split("-")[0].lower()
-
-    # Força Hindi para Inglês
-    if lang_code == "hi":
-        lang_code = "en"
-
-    image_map = {
-        "pt": "DicaTeclado_Portugues.png",
-        "ru": "DicaTeclado_Russo.png",
-        "it": "DicaTeclado_Italiano.png",
-        "ar": "DicaTeclado_Arabe.png",
-        "es": "DicaTeclado_Espanhol.png",
-        "fr": "DicaTeclado_Frances.png",
-    }
-    image_filename = image_map.get(lang_code, "DicaTeclado_Ingles.png")
-
-    # Tenta enviar pelo cache (file_id) primeiro
-    cached_id = TIP_IMAGE_CACHE.get(image_filename)
-    success = False
-    error_msg = None
-
-    if cached_id:
-        try:
-            await context.bot.send_photo(chat_id=chat_id, photo=cached_id)
-            success = True
-        except Exception:
-            TIP_IMAGE_CACHE.pop(image_filename, None)
-
-    if not success:
-        image_path = os.path.join(os.path.dirname(__file__), image_filename)
-
-        # Fallback para inglês se a imagem traduzida não existir
-        if (
-            not os.path.exists(image_path)
-            and image_filename != "DicaTeclado_Ingles.png"
-        ):
-            image_filename = "DicaTeclado_Ingles.png"
-            image_path = os.path.join(os.path.dirname(__file__), image_filename)
-
-        if os.path.exists(image_path):
-            try:
-                def _read_bytes(path: str) -> bytes:
-                    with open(path, "rb") as f:
-                        return f.read()
-
-                img_data = await asyncio.to_thread(_read_bytes, image_path)
-                sent_msg = await context.bot.send_photo(chat_id=chat_id, photo=io.BytesIO(img_data))
-                if sent_msg.photo:
-                    TIP_IMAGE_CACHE[image_filename] = sent_msg.photo[-1].file_id
-                    success = True
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Erro ao enviar imagem de dica ({image_filename}): {e}")
-        else:
-            error_msg = "Arquivo não encontrado"
-            logger.error(f"Imagem de dica não encontrada: {image_filename}")
-
-    if success and ADMIN_ID and user.id != ADMIN_ID and ADMIN_NOTIFICATIONS_ENABLED:
-        try:
-            # A dica é enviada somente ao usuário; não há encaminhamento de
-            # identidade ou conteúdo ao administrador.
-            if context.user_data.get("is_new_user"):
-                context.user_data.pop("is_new_user", None)
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text="🔔 Dica de teclado enviada a um usuário.",
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            logger.error(f"Erro ao notificar admin sobre dica enviada: {e}")
-
-    if not success and error_msg and ADMIN_ID:
-        try:
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text="⚠️ Não foi possível enviar uma dica de teclado a um usuário.",
-            )
-        except Exception:
-            pass
-
 
 async def check_and_handle_setup_flow(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -1637,7 +1549,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         tip = get_random_tip(user, context)
         if tip:
             await update.message.reply_html(tip)
-        await send_keyboard_tip_image(update, context)
         return
 
     # Estilo CSS para o HTML ser premium
@@ -1680,7 +1591,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     # Adiciona botão de apoio no caption do manual
     keyboard_help = [
-        [InlineKeyboardButton(get_text(user, context, "menu_contribute"), callback_data="contribute:menu")],
+        [
+            InlineKeyboardButton(get_text(user, context, "menu_contribute"), callback_data="contribute:menu"),
+            InlineKeyboardButton("🔗 GitHub", url="https://github.com/MartianCatBR/MergeImagesTelegramBot"),
+        ],
         [InlineKeyboardButton(get_text(user, context, "menu_support_tickets"), callback_data="help_open_tickets")],
     ]
 
@@ -5317,7 +5231,6 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 await update.message.reply_html(
                     get_text(user, context, "captcha_success")
                 )
-                await send_keyboard_tip_image(update, context)
                 await show_start_menu(update, context)
             else:
                 raise ValueError("Wrong answer")
@@ -12611,10 +12524,7 @@ async def cache_command(
                 cache_files += 1
 
     pending_logs_size = sum(sys.getsizeof(item) for item in PENDING_LOGS)
-    tip_cache_size = sum(
-        sys.getsizeof(key) + sys.getsizeof(value)
-        for key, value in TIP_IMAGE_CACHE.items()
-    )
+
     user_data_count = sum(
         len(data)
         for data in getattr(context.application, "user_data", {}).values()
@@ -12626,7 +12536,7 @@ async def cache_command(
         f"📌 <b>Processo principal:</b> {size_mb(memory_info.rss):.2f} MB RSS\n"
         f"📦 <b>Memória virtual:</b> {size_mb(memory_info.vms):.2f} MB VMS\n"
         f"👶 <b>Processos filhos:</b> {len(children)} ({size_mb(children_rss):.2f} MB RSS)\n\n"
-        f"🖼️ <b>TIP_IMAGE_CACHE:</b> {len(TIP_IMAGE_CACHE)} itens, ~{size_mb(tip_cache_size):.2f} MB\n"
+
         f"📝 <b>PENDING_LOGS:</b> {len(PENDING_LOGS)} itens, ~{size_mb(pending_logs_size):.2f} MB\n"
         f"👥 <b>PROCESSING_QUEUE:</b> {len(PROCESSING_QUEUE)} itens\n"
         f"💾 <b>context.user_data:</b> ~{user_data_count} entradas\n"

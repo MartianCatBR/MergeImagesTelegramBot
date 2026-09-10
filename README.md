@@ -127,6 +127,6 @@ Before opening an issue, please avoid including bot tokens, database files, priv
 
 ## 📄 License
 
-No license file has been added yet. Add a license before presenting the repository as reusable open-source software.
+This project is licensed under the [MIT License](LICENSE).
 
 </div>
