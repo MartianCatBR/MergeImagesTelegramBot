@@ -1,0 +1,16 @@
+python-telegram-bot[ext]==22.8
+Pillow==12.3.0
+aiosqlite==0.22.1
+psutil==7.2.2
+aiohttp==3.14.3
+httpx==0.28.1
+APScheduler==3.11.3
+matplotlib==3.11.1
+pytesseract==0.3.13
+opencv-python-headless==4.14.0.94
+numpy==2.5.3
+PyMuPDF==1.28.2
+pillow_heif==1.7.0
+pdf2docx==0.5.13
+rembg[cpu]==2.0.84
+qrcode==8.2.0

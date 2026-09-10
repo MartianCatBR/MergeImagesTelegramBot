@@ -1,0 +1,39 @@
+services:
+  unify-images-bot:
+    # Constrói a imagem a partir do Dockerfile no diretório atual
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: unify_images_bot
+    network_mode: host
+    # Reinicia o bot automaticamente se ele falhar ou se o servidor reiniciar
+    restart: unless-stopped
+    # Carrega as variáveis de ambiente (Token) do arquivo .env
+    env_file: .env
+    # Persiste o banco de dados mapeando a pasta data do host para o container
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  unify-images-miniapp:
+    build: 
+      context: ./miniapp
+      dockerfile: Dockerfile
+    container_name: unify_images_miniapp
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - PORT=3005
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
