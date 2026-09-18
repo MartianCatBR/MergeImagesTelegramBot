@@ -2608,9 +2608,13 @@ def _gif_to_video_task(gif_bytes: bytes) -> str:
 
     try:
         cap = cv2.VideoCapture(tmp_gif_path)
-        fps = cap.get(cv2.CAP_PROP_FPS) or 10
+        fps_raw = cap.get(cv2.CAP_PROP_FPS)
+        fps = fps_raw if fps_raw > 0 else 10
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if width <= 0 or height <= 0:
+            cap.release()
+            raise ValueError("Dimensões do vídeo inválidas")
 
         # Codec mp4v é amplamente suportado
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -9239,7 +9243,7 @@ def _censor_faces_task(image_bytes: bytes, blur_option: str) -> tuple[bytes, int
         cascade_alt = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt2.xml")
         if not cascade_alt.empty():
             detected_alt = cascade_alt.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=3, minSize=(25, 25), flags=cv2.CASCADE_SCALE_IMAGE
+                gray, scaleFactor=1.1, minNeighbors=3, minSize=(25, 25)
             )
             if len(detected_alt) > 0:
                 faces.extend(detected_alt)
@@ -9250,7 +9254,7 @@ def _censor_faces_task(image_bytes: bytes, blur_option: str) -> tuple[bytes, int
         cascade_default = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         if not cascade_default.empty():
             detected_def = cascade_default.detectMultiScale(
-                gray, scaleFactor=1.15, minNeighbors=4, minSize=(25, 25), flags=cv2.CASCADE_SCALE_IMAGE
+                gray, scaleFactor=1.15, minNeighbors=4, minSize=(25, 25)
             )
             if len(detected_def) > 0:
                 faces.extend(detected_def)
@@ -9261,7 +9265,7 @@ def _censor_faces_task(image_bytes: bytes, blur_option: str) -> tuple[bytes, int
         cascade_profile = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
         if not cascade_profile.empty():
             detected_prof = cascade_profile.detectMultiScale(
-                gray, scaleFactor=1.15, minNeighbors=4, minSize=(25, 25), flags=cv2.CASCADE_SCALE_IMAGE
+                gray, scaleFactor=1.15, minNeighbors=4, minSize=(25, 25)
             )
             if len(detected_prof) > 0:
                 faces.extend(detected_prof)
@@ -10405,7 +10409,6 @@ async def diagnostic_command(
     # Tarefa 1: Versões das Bibliotecas (rede)
     async def get_lib_versions():
         libs_to_check = [
-            "pip",
             "python-telegram-bot",
             "Pillow",
             "aiosqlite",
@@ -10579,6 +10582,7 @@ async def diagnostic_command(
                 tools["display"][tool_key] = f"❌ {display_name} erro: {str(e)[:80]}"
 
         await asyncio.gather(
+            run_tool("uv", "uv", "uv", "--version"),
             run_tool("tesseract", "Tesseract OCR", "tesseract", "--version"),
             run_tool("tesseract_langs", "Idiomas Tesseract", "tesseract", "--list-langs"),
             run_tool("libreoffice", "LibreOffice", "soffice", "--version"),
@@ -10588,89 +10592,20 @@ async def diagnostic_command(
 
     tasks["system_tools"] = asyncio.create_task(check_system_tools())
 
-    # Tarefa 5: Diagnóstico do Mini App (Go Backend)
-    async def check_miniapp_diagnostics():
-        env_url = os.getenv("MINIAPP_DIAGNOSTIC_URL", "").strip()
-        env_port = os.getenv("MINIAPP_PORT", "").strip()
-        candidate_bases = []
-        if env_url:
-            candidate_bases.append(env_url)
-        if env_port:
-            candidate_bases.extend([f"http://127.0.0.1:{env_port}", f"http://localhost:{env_port}"])
-        candidate_bases.extend([
-            "http://127.0.0.1:3005",
-            "http://localhost:3005",
-            "http://127.0.0.1:3000",
-            "http://localhost:3000",
-            "http://unify-images-miniapp:3005",
-            "http://unify-images-miniapp:3000",
-            "http://miniapp:3000",
-        ])
-
-        seen = set()
-        candidate_bases = [url.rstrip("/") for url in candidate_bases if url and not (url in seen or seen.add(url))]
-        errors = []
-        async with aiohttp.ClientSession() as session:
-            for base_url in candidate_bases:
-                diagnostics_url = f"{base_url}/api/diagnostics"
-                try:
-                    async with session.get(diagnostics_url, timeout=3.0) as resp:
-                        if resp.status != 200:
-                            errors.append(f"{diagnostics_url} -> HTTP {resp.status}")
-                            continue
-                        data = await resp.json()
-                        return {
-                            "active": True,
-                            "url": diagnostics_url,
-                            "go_version": data.get("go_version", "N/A"),
-                            "fiber_version": data.get("fiber_version", "N/A"),
-                            "uptime": data.get("uptime", "N/A"),
-                            "os": data.get("os", "N/A"),
-                            "arch": data.get("arch", "N/A"),
-                            "goroutines": data.get("goroutines", 0)
-                        }
-                except Exception as e:
-                    errors.append(f"{diagnostics_url} -> {type(e).__name__}: {str(e)[:80]}")
-        return {"active": False, "errors": errors[:4]}
-
-    tasks["miniapp"] = asyncio.create_task(check_miniapp_diagnostics())
-
-    # Tarefa 6: Checagem de Versões Mais Recentes (Go, Fiber, LibreOffice, SQLite, Tesseract, Poppler, SSL)
+    # Tarefa 5: Checagem de Versões Mais Recentes (LibreOffice, SQLite, Tesseract, Poppler, SSL)
     async def check_software_updates_and_ssl():
         results = {
-            "go": None,
-            "fiber": None,
             "libreoffice": None,
             "sqlite": None,
             "tesseract": None,
             "poppler": None,
+            "uv": None,
             "ssl": [],
         }
 
         headers = {"User-Agent": f"UnifyImagesBot/{VERSION}"}
         connector = aiohttp.TCPConnector(family=socket.AF_INET)
         async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
-            async def get_go():
-                try:
-                    async with session.get("https://go.dev/dl/?mode=json", timeout=3.5) as r:
-                        if r.status == 200:
-                            d = await r.json()
-                            if d and isinstance(d, list):
-                                return d[0]["version"].replace("go", "")
-                except Exception:
-                    pass
-                return None
-
-            async def get_fiber():
-                try:
-                    async with session.get("https://proxy.golang.org/github.com/gofiber/fiber/v2/@latest", timeout=3.5) as r:
-                        if r.status == 200:
-                            d = await r.json()
-                            return d.get("Version", "").lstrip("v")
-                except Exception:
-                    pass
-                return None
-
             async def get_lo():
                 try:
                     async with session.get("https://endoflife.date/api/libreoffice.json", timeout=3.5) as r:
@@ -10716,6 +10651,16 @@ async def diagnostic_command(
                     pass
                 return None
 
+            async def get_uv():
+                try:
+                    async with session.get("https://api.github.com/repos/astral-sh/uv/releases/latest", timeout=3.5) as r:
+                        if r.status == 200:
+                            d = await r.json()
+                            return d.get("tag_name", "").lstrip("v")
+                except Exception:
+                    pass
+                return None
+
             def check_ssl_endpoint(host, port=443):
                 try:
                     ctx = ssl.create_default_context()
@@ -10738,7 +10683,7 @@ async def diagnostic_command(
 
             # Hosts para checagem SSL
             ssl_hosts = ["api.telegram.org"]
-            for env_key in ("MINIAPP_URL", "MINIAPP_DIAGNOSTIC_URL", "WEBHOOK_URL", "SERVER_DOMAIN"):
+            for env_key in ("WEBHOOK_URL", "SERVER_DOMAIN"):
                 v = os.getenv(env_key, "").strip()
                 if v and "://" in v:
                     try:
@@ -10753,16 +10698,15 @@ async def diagnostic_command(
 
             ssl_tasks = [asyncio.get_running_loop().run_in_executor(None, check_ssl_endpoint, h) for h in ssl_hosts]
 
-            go_res, fib_res, lo_res, sql_res, tess_res, pop_res, *ssl_res = await asyncio.gather(
-                get_go(), get_fiber(), get_lo(), get_sqlite(), get_tesseract(), get_poppler(), *ssl_tasks
+            lo_res, sql_res, tess_res, pop_res, uv_res, *ssl_res = await asyncio.gather(
+                get_lo(), get_sqlite(), get_tesseract(), get_poppler(), get_uv(), *ssl_tasks
             )
 
-            results["go"] = go_res
-            results["fiber"] = fib_res
             results["libreoffice"] = lo_res
             results["sqlite"] = sql_res
             results["tesseract"] = tess_res
             results["poppler"] = pop_res
+            results["uv"] = uv_res
             results["ssl"] = ssl_res
             return results
 
@@ -10780,21 +10724,24 @@ async def diagnostic_command(
     conn_info = tasks["connections"].result()
     py_current, py_latest = tasks["python"].result()
     system_tools = tasks["system_tools"].result()
-    miniapp_info = tasks["miniapp"].result()
     soft_updates = tasks["software_updates"].result()
 
     libs_info_lines = []
     update_buttons = []
-    pip_display = "N/A"
+
+    # uv é um binário de sistema — versão lida via subprocess (run_tool), não via importlib
+    installed_uv = system_tools.get("raw", {}).get("uv")
+    latest_uv = soft_updates.get("uv")
+    if installed_uv:
+        if latest_uv and installed_uv != latest_uv:
+            uv_display = f"<code>{installed_uv}</code> ⚠️ (Nova: <code>{latest_uv}</code>)"
+        else:
+            uv_display = f"✅ <code>{installed_uv}</code>"
+    else:
+        uv_display = "❌ Não detectado"
 
     for res in lib_results:
         libs_info_lines.append(res["text"])
-        if res["lib_name"] == "pip":
-            pip_display = f"<code>{res['version']}</code>"
-            if res["update_available"]:
-                match = re.search(r"Nova: ([\d.]+)", res["text"])
-                if match:
-                    pip_display += f" (Nova: {match.group(1)})"
 
         if res["update_available"]:
             update_buttons.append(
@@ -10820,49 +10767,6 @@ async def diagnostic_command(
     py_display = f"<code>{py_current}</code>"
     if py_latest and py_latest != py_current:
         py_display = f"⚠️ <code>{py_current}</code> (Nova: {py_latest})"
-
-    # --- Formatação do Mini App (Go Backend) ---
-    miniapp_status = ""
-    if miniapp_info["active"]:
-        installed_go = miniapp_info["go_version"].replace("go", "").strip()
-        latest_go = soft_updates.get("go")
-        go_disp = f"<code>{miniapp_info['go_version']}</code>"
-        if latest_go and installed_go and not installed_go.startswith(latest_go) and latest_go not in installed_go:
-            go_disp = f"⚠️ <code>{miniapp_info['go_version']}</code> (Nova: <code>go{latest_go}</code>)"
-        else:
-            go_disp = f"✅ <code>{miniapp_info['go_version']}</code>"
-
-        installed_fiber = miniapp_info["fiber_version"].lstrip("v").strip()
-        latest_fiber = soft_updates.get("fiber")
-        fiber_disp = f"<code>Fiber {miniapp_info['fiber_version']}</code>"
-        if latest_fiber and installed_fiber and installed_fiber != latest_fiber:
-            fiber_disp = f"⚠️ <code>Fiber {miniapp_info['fiber_version']}</code> (Nova: <code>v{latest_fiber}</code>)"
-        else:
-            fiber_disp = f"✅ <code>Fiber {miniapp_info['fiber_version']}</code>"
-
-        miniapp_status = (
-            f"<b><u>Mini App (Go Backend)</u></b>\n"
-            f"<b>Status:</b> ✅ Ativo\n"
-            f"<b>Endpoint:</b> <code>{miniapp_info.get('url', 'N/A')}</code>\n"
-            f"<b>Uptime:</b> <code>{miniapp_info['uptime']}</code>\n"
-            f"<b>Versão Go:</b> {go_disp}\n"
-            f"<b>Framework:</b> {fiber_disp}\n"
-            f"<b>Sistema (Go):</b> <code>{miniapp_info['os']}/{miniapp_info['arch']}</code>\n"
-            f"<b>Goroutines:</b> <code>{miniapp_info['goroutines']}</code>\n\n"
-        )
-    else:
-        miniapp_errors = miniapp_info.get("errors") or []
-        miniapp_error_text = ""
-        if miniapp_errors:
-            miniapp_error_text = (
-                "<b>Tentativas:</b>\n"
-                f"<code>{html.escape(chr(10).join(miniapp_errors))}</code>\n"
-            )
-        miniapp_status = (
-            f"<b><u>Mini App (Go Backend)</u></b>\n"
-            f"<b>Status:</b> ❌ Inativo (Sem Resposta)\n"
-            f"{miniapp_error_text}\n"
-        )
 
     # --- Formatação das Ferramentas de Sistema (Tesseract, Poppler, LibreOffice) ---
     sys_display = system_tools.get("display", {})
@@ -10931,9 +10835,8 @@ async def diagnostic_command(
         f"<b><u>Bot & Ambiente</u></b>\n"
         f"<b>Uptime:</b> <code>{uptime_str}</code>\n"
         f"<b>Versão Python:</b> {py_display}\n"
-        f"<b>Versão Pip:</b> {pip_display}\n"
+        f"<b>Versão uv:</b> {uv_display}\n"
         f"<b>Sistema:</b> <code>{system_info}</code>\n\n"
-        f"{miniapp_status}"
         f"<b><u>Ferramentas de Sistema</u></b>\n"
         f"<b>ONNX Runtime:</b> <code>{sys_display.get('onnx', 'N/A')}</code>\n"
         f"<b>Tesseract OCR:</b> {tess_disp}\n"
@@ -12014,12 +11917,7 @@ async def handle_lib_update(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.error(f"Erro ao editar mensagem de atualização: {e}")
 
     proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        lib_name,
+        "uv", "pip", "install", "--system", "--upgrade", lib_name,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -13147,7 +13045,7 @@ async def support_reminder_task(context: ContextTypes.DEFAULT_TYPE) -> None:
                   AND user_id != ?
                   AND date(joined_at) <= date('now', '-7 days')
             """
-            async with db.execute(query, (ADMIN_ID, AD_THRESHOLD)) as cursor:
+            async with db.execute(query, (ADMIN_ID,)) as cursor:
                 eligible_users = await cursor.fetchall()
 
         sent_count = 0
