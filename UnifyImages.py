@@ -82,11 +82,12 @@ def convert_from_bytes(pdf_bytes: bytes, dpi: int = 150) -> list:
     doc.close()
     return images
 from telegram import (
-    LabeledPrice,
-    PreCheckoutQuery,
+    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-
+    LabeledPrice,
+    MenuButtonCommands,
+    PreCheckoutQuery,
     ReplyKeyboardMarkup,
     Update,
     User,
@@ -355,7 +356,7 @@ def get_main_menu_keyboard(
             get_text(user, context, "menu_cancel"),
         ],
     ]
-    return ReplyKeyboardMarkup(kb, resize_keyboard=True, is_persistent=True)
+    return ReplyKeyboardMarkup(kb, resize_keyboard=True, is_persistent=True, one_time_keyboard=False)
 
 
 def get_admin_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -387,7 +388,7 @@ def get_admin_menu_keyboard() -> ReplyKeyboardMarkup:
             "🧠 /cache",
         ],
     ]
-    return ReplyKeyboardMarkup(kb, resize_keyboard=True, is_persistent=True)
+    return ReplyKeyboardMarkup(kb, resize_keyboard=True, is_persistent=True, one_time_keyboard=False)
 
 
 def get_tools_menu_keyboard(
@@ -425,7 +426,7 @@ def get_tools_menu_keyboard(
             get_text(user, context, "menu_contribute"),
         ],
     ]
-    return ReplyKeyboardMarkup(kb, resize_keyboard=True, is_persistent=True)
+    return ReplyKeyboardMarkup(kb, resize_keyboard=True, is_persistent=True, one_time_keyboard=False)
 
 
 def get_language_buttons(prefix: str) -> list[list[InlineKeyboardButton]]:
@@ -989,6 +990,23 @@ async def post_init(application: Application) -> None:
     """Inicializa o banco de dados antes do bot começar."""
     await setup_database()
     await check_database_integrity()
+
+    # Registra comandos oficiais e ativa o botão de Menu permanente no chat do Telegram
+    try:
+        commands = [
+            BotCommand("start", "Iniciar / Main menu"),
+            BotCommand("menu", "Menu principal"),
+            BotCommand("ferramentas", "Ferramentas / Tools"),
+            BotCommand("help", "Ajuda / Help"),
+            BotCommand("cancel", "Cancelar / Cancel"),
+            BotCommand("settings", "Configurações / Settings"),
+            BotCommand("version", "Versão / Version"),
+        ]
+        await application.bot.set_my_commands(commands)
+        await application.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    except Exception as e:
+        logger.warning(f"Erro ao registrar comandos e menu button no Telegram: {e}")
+
     # Configura o módulo de tickets com dependências do bot principal
     tickets_mod.setup_tickets_module(
         db_file=DB_FILE,
@@ -1791,12 +1809,6 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_html(
         msg_text,
         reply_markup=reply_markup,
-    )
-
-    # O teclado inline acima controla a imagem; esta mensagem restaura o menu principal.
-    await update.message.reply_text(
-        get_text(user, context, "image_received"),
-        reply_markup=get_main_menu_keyboard(user, context),
     )
 
 
@@ -14238,6 +14250,7 @@ def main() -> None:
     )
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("menu", start))
     application.add_handler(CommandHandler("anuncios_qtd", set_ad_threshold))
     application.add_handler(CommandHandler("contribute", contribute_command))
     application.add_handler(CommandHandler("apoiar", contribute_command))
@@ -14249,6 +14262,7 @@ def main() -> None:
 
     application.add_handler(CommandHandler("version", version_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("ajuda", help_command))
     application.add_handler(
         CommandHandler("merge_vertically", merge_vertically_command)
     )
@@ -14257,6 +14271,7 @@ def main() -> None:
     )
 
     application.add_handler(CommandHandler("cancel", cancel_command))
+    application.add_handler(CommandHandler("cancelar", cancel_command))
     application.add_handler(CommandHandler("relatorio", report_command))
     application.add_handler(CommandHandler("relatorio_uso", usage_report_graph_command))
 
